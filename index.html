@@ -167,6 +167,17 @@
   .show-hidden{ background:none; border:none; color: var(--text-faint); font-size: 12px; text-align:left; padding: 10px 4px 2px; cursor:pointer; }
   .show-hidden:hover{ color: var(--text-dim); text-decoration: underline; }
 
+  .divider-row{ display:flex; align-items:center; gap: 10px; padding: 10px 4px 8px; }
+  .divider-toggle{
+    background:none; border:none; color: var(--text-faint); cursor:pointer; padding: 2px;
+    display:flex; align-items:center; justify-content:center; flex-shrink:0; transition: transform 0.15s ease;
+  }
+  .divider-toggle svg{ width: 13px; height: 13px; }
+  .divider-toggle:hover{ color: var(--text); }
+  .divider-toggle.collapsed{ transform: rotate(-90deg); }
+  .divider-line{ flex:1; height:1px; background: rgba(255,255,255,0.08); }
+  .divider-label{ font-size: 11.5px; color: var(--text-faint); white-space: nowrap; }
+
   .sublist{ list-style:none; margin: 2px 0 2px 0; padding: 0 0 0 24px; border-left: 1px solid rgba(255,255,255,0.06); }
   .subrow{ display:flex; align-items:center; gap:8px; padding: 5px 4px; }
 
@@ -230,6 +241,7 @@
 <script>
 (function(){
   var STORAGE_KEY = 'eorzea-checklist-v3';
+  var COLLAPSE_KEY = 'eorzea-recurring-collapsed';
 
   var ICONS = {
     eye: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>',
@@ -238,7 +250,8 @@
     refresh: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 11A8 8 0 0 0 6.3 6.3L4 8.6"/><path d="M4 4v4.6h4.6"/><path d="M4 13a8 8 0 0 0 13.7 4.7L20 15.4"/><path d="M20 20v-4.6h-4.6"/></svg>',
     addSub: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 4v7a2 2 0 0 0 2 2h9"/><path d="M13 10l3 3-3 3"/></svg>',
     close: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg>',
-    handle: '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="15" cy="18" r="1.6"/></svg>'
+    handle: '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="15" cy="18" r="1.6"/></svg>',
+    chevron: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>'
   };
 
   var PRIORITY_ORDER = ['poor','common','uncommon','rare','epic','legendary'];
@@ -311,6 +324,8 @@
   var editingId = null;
   var editingSub = null;
   var draggedId = null;
+  var recurringCollapsed = false;
+  try{ recurringCollapsed = localStorage.getItem(COLLAPSE_KEY) === '1'; }catch(e){}
 
   function save(){
     try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
@@ -337,6 +352,8 @@
   function isOffscreen(item){
     return item.hidden || (item.done && !item.resetType);
   }
+
+  function groupOf(item){ return item.resetType || 'none'; }
 
   function findItem(id){ return state.items.filter(function(i){ return i.id === id; })[0]; }
 
@@ -418,6 +435,16 @@
     );
   }
 
+  function dividerTemplate(hiddenCount){
+    return (
+      '<li class="divider-row">' +
+        '<button class="divider-toggle' + (recurringCollapsed ? ' collapsed' : '') + '" data-recurring-toggle title="' + (recurringCollapsed ? 'Show' : 'Hide') + ' weekly and daily missions">' + ICONS.chevron + '</button>' +
+        '<span class="divider-line"></span>' +
+        '<span class="divider-label">' + (recurringCollapsed ? hiddenCount + ' hidden' : 'Weekly and daily') + '</span>' +
+      '</li>'
+    );
+  }
+
   function render(){
     var items = state.items;
     var listEl = document.getElementById('list');
@@ -430,11 +457,19 @@
 
     countEl.textContent = items.length ? (openCount + ' open') : '';
 
-    if(visible.length === 0){
-      listEl.innerHTML = '<li class="empty">No missions yet. Post one below.</li>';
-    } else {
-      listEl.innerHTML = visible.map(rowTemplate).join('');
+    var weeklyItems = visible.filter(function(i){ return i.resetType === 'weekly'; });
+    var dailyItems = visible.filter(function(i){ return i.resetType === 'daily'; });
+    var otherItems = visible.filter(function(i){ return !i.resetType; });
+    var recurring = weeklyItems.concat(dailyItems);
+
+    var html = '';
+    if(recurring.length){
+      if(!recurringCollapsed){ html += recurring.map(rowTemplate).join(''); }
+      html += dividerTemplate(recurring.length);
     }
+    html += otherItems.map(rowTemplate).join('');
+
+    listEl.innerHTML = html || '<li class="empty">No missions yet. Post one below.</li>';
 
     if(offCount > 0){
       hiddenBtn.style.display = 'block';
@@ -515,6 +550,9 @@
     listEl.addEventListener('dragover', function(e){
       var row = e.target.closest('.row');
       if(!row || !draggedId) return;
+      var draggedItem = findItem(draggedId);
+      var targetItem = findItem(row.getAttribute('data-id'));
+      if(!draggedItem || !targetItem || groupOf(draggedItem) !== groupOf(targetItem)) return;
       e.preventDefault();
       e.dataTransfer.dropEffect = 'move';
       var rect = row.getBoundingClientRect();
@@ -526,9 +564,11 @@
     listEl.addEventListener('drop', function(e){
       var row = e.target.closest('.row');
       e.preventDefault();
-      if(!row || !draggedId) return;
+      if(!row || !draggedId){ clearDragVisuals(); draggedId = null; return; }
       var targetId = row.getAttribute('data-id');
-      if(targetId && targetId !== draggedId){
+      var draggedItem = findItem(draggedId);
+      var targetItem = findItem(targetId);
+      if(targetId && targetId !== draggedId && draggedItem && targetItem && groupOf(draggedItem) === groupOf(targetItem)){
         var rect = row.getBoundingClientRect();
         var insertAfter = (e.clientY - rect.top) >= rect.height / 2;
         reorder(draggedId, targetId, insertAfter);
@@ -541,6 +581,14 @@
 
     listEl.addEventListener('click', function(e){
       var t = e.target;
+
+      var toggleBtn = t.closest('[data-recurring-toggle]');
+      if(toggleBtn){
+        recurringCollapsed = !recurringCollapsed;
+        try{ localStorage.setItem(COLLAPSE_KEY, recurringCollapsed ? '1' : '0'); }catch(err){}
+        render();
+        return;
+      }
 
       var textSpan = t.closest('[data-text]');
       if(textSpan && editingId !== textSpan.getAttribute('data-text')){
